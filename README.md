@@ -2,7 +2,7 @@
 
 Basic Assigments for Deep Learning.
 
-> Some of them are just for python programming not for dl.
+> Some of them are just for python programming.
 
 Exercise 01 (Python programming): Define a function for inner product.
 Exercise 02 (Python programming): Create an array with products of two elements out of the original array with integers.
