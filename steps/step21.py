@@ -1,13 +1,17 @@
+import contextlib
 import numpy as np
 import unittest
 import weakref
 
 class Variable:
-    def __init__(self, data):
+    __array_priority__ = 200
+
+    def __init__(self, data, name=None):
         if data is not None and not isinstance(data, np.ndarray):
             raise TypeError(f"{type(data)} is an unsupported type.")
 
         self.data = data
+        self.name = name
         self.grad = None
         self.creator = None
         self.generation = 0
@@ -19,7 +23,7 @@ class Variable:
         self.creator = func
         self.generation = func.generation + 1
 
-    def backward(self):
+    def backward(self, retain_grad=False):
         if self.grad is None:
             self.grad = np.ones_like(self.data)
 
@@ -51,23 +55,53 @@ class Variable:
 
                 if x.creator is not None:
                     add_func(x.creator)
+            
+            if not retain_grad: # If retain_grad is False
+                for y in f.outputs:
+                    y().grad = None
 
     def cleargrad(self):
         self.grad = None
 
+    @property
+    def ndim(self):
+        return self.data.ndim
+    
+    @property
+    def size(self):
+        return self.data.size
+
+    @property
+    def dtype(self):
+        return self.data.dtype
+
+    def __len__(self):
+        return len(self.data)
+
+    def __repr__(self):
+        if self.data is None:
+            return "variable(None)"
+        p = str(self.data).replace("\n", "\n" + " "*9)
+        return 'variable(' + p + ')'
+
+
+
 class Function:
     def __call__(self, *inputs):
+        inputs = [as_variable(x) for x in inputs]
+
         xs = [x.data for x in inputs]
         ys = self.forward(*xs)
         if not isinstance(ys, tuple):
             ys = (ys, )
         outputs = [Variable(as_array(y)) for y in ys]
 
-        self.generation = max([x.generation for x in inputs])
-        for output in outputs:
-            output.set_creator(self)
-        self.inputs = inputs
-        self.outputs = [weakref.ref(output) for output in outputs]
+        if Config.enable_backprop:
+            self.generation = max([x.generation for x in inputs])
+            for output in outputs:
+                output.set_creator(self)
+            self.inputs = inputs
+            self.outputs = [weakref.ref(output) for output in outputs]
 
         return outputs if len(outputs) > 1 else outputs[0]
     
@@ -105,6 +139,15 @@ class Add(Function):
     def backward(self, gy):
         return gy, gy
 
+class Mul(Function):
+    def forward(self, x0, x1):
+        y = x0 * x1
+        return y
+    
+    def backward(self, gy):
+        x0, x1 = self.inputs[0].data, self.inputs[1].data
+        return gy*x1, gy*x0
+
 def numerical_diff(f, x, eps=1e-4):
     x0 = Variable(x.data - eps)
     x1 = Variable(x.data + eps)
@@ -119,12 +162,43 @@ def exp(x):
     return Exp()(x)
 
 def add(x0, x1):
+    x1 = as_array(x1)
     return Add()(x0, x1)
+
+def mul(x0, x1):
+    x1 = as_array(x1)
+    return Mul()(x0, x1)
+
+Variable.__add__ = add
+Variable.__radd__ = add
+Variable.__mul__ = mul
+Variable.__rmul__ = mul
+
 
 def as_array(x):
     if np.isscalar(x):
         return np.array(x)
     return x
+
+def as_variable(obj):
+    if isinstance(obj, Variable):
+        return obj
+    return Variable(obj)
+
+class Config:
+    enable_backprop = True
+
+@contextlib.contextmanager
+def using_config(name, value):
+    old_value = getattr(Config, name)
+    setattr(Config, name, value)
+    try:
+        yield
+    finally:
+        setattr(Config, name, old_value)
+
+def no_grad():
+    return using_config('enable_backprop', False)
 
 class SquareTest(unittest.TestCase):
     def test_forward(self):
@@ -149,10 +223,6 @@ class SquareTest(unittest.TestCase):
         self.assertTrue(flg)
 
 if __name__ == "__main__":
-    x = Variable(np.array(2.0))
-    a = square(x)
-    y = add(square(a), square(a))
-    y.backward()
-
+    x = Variable(np.array([1.0]))
+    y = np.array([3.0]) + x
     print(y)
-    print(x.grad)
